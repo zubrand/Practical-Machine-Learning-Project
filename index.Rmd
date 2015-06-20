@@ -1,0 +1,139 @@
+---
+title: "Practical Machine Learning Project"
+author: "azhubryd"
+date: "Thursday, June 18, 2015"
+output: html_document
+---
+
+In this project machine learning algorithms are applied for the problem of determination of activity performed. Different methods are applied and analysed in order to generate an accurate prediction. Tree-based methods turned out to be the most accurate for this dataset.
+
+## Data Processing
+
+
+First, we load required libraries, download and open the datasets.
+
+```{r echo=FALSE}
+library(e1071)
+library(caret)
+```
+```{r eval = FALSE}
+download.file(url = 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', 'training.csv')
+download.file(url = 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv', 'testing.csv')
+```
+
+```{r cache=TRUE}
+data <- read.csv('training.csv')
+validate <- read.csv('testing.csv')
+```
+
+To develop reliable and precise prediction we will split our **training.csv** dataset
+into 2 subsets: **training**, on which we will train algorithms, and **testing**, which will help us to determine the best prediction algoritmh. Also, we create a small sample called **test5**, which consists of only complete cases.
+
+
+``` {r cache=TRUE}
+set.seed(1234)
+inTrain <- createDataPartition(y = data$classe,p = 0.7,list = FALSE)
+training <- data[inTrain,]
+testing <- data[-inTrain,]
+test5 <- data[complete.cases(data),]
+```
+
+Now, let's take a look at the **training** dataset:
+
+```{r}
+dim(training)
+str(training[,1:10])
+```
+
+As we see, it contains `r dim(training)[2]` columns, which is quite a lot. We want to decrease this number and leave more significant columns for our predicting algorithms. We will delete columns, which fall under at least one of the following rules:
+
+- near zero variance (function **nearZeroVar** from **caret** package)
+- columns with technical information: timestamps, rowid etc.
+- column contains more than 90% of NAs
+    
+These analyses will be executed on the **training** dataset and applied for all the datasets: **training**, **testing** and **validate** (20 cases we have to predict).
+
+```{r cache=TRUE}
+nrzero <- nearZeroVar(x = training,foreach = FALSE, freqCut = 95/5,uniqueCut = 10,saveMetrics = FALSE,allowParallel = TRUE)
+technical <- c(1,3:5)
+highNA <- which(colSums(is.na(training))/nrow(training) > 0.9)
+
+toDelete <- unique(c(nrzero, technical, highNA))
+length(toDelete)
+# Checking if response variable 'classe' is among these variables
+'classe' %in% names(training)[toDelete]
+training <- training[,-toDelete]
+testing <- testing[,-toDelete]
+test5 <- test5[,-toDelete]
+validate <- validate[,-toDelete]
+dim(training)
+```
+
+So, `r length(toDelete)` columns fall under our rules and can be removed and we're left with only `r dim(training)[2]-1` predictive variables and 1 response ***classe***.
+
+## Algorithm Selection
+
+Our training dataset is quite big: `r nrow(training)` cases and `r ncol(training)-1` predictive variables. So, we'll start from using **test5** dataset with only `r nrow(test5)` cases to select a shortlist of methods, which later will be trained on the **training** dataset. As those calculation of long list of methods are very complex and messy, I'll present just the results on the shortlist and most popular methods:
+
+```{r echo=FALSE}
+options(digits = 4)
+load('Images_test/results.RData')
+test5_results
+```
+
+As we see from the **training** and **testing** datasets, performance of these methods is quite good if to take into account such small training sample. Although, *rpart* method didn't perform very well, so only this method will be excluded from further calculations.
+
+Next step is running a short list of `r nrow(test5_results)-1` methods on the **training** dataset, which yeilded the following results:
+
+```{r echo=FALSE}
+load('Images/results.RData')
+final_results
+```
+
+We see an awesome performance of 3 methods:
+
+- **C5.0** - boosted tree/rule-based algorithm
+- **rf** - random forest
+- **treebag** - bagged tree algotithm
+
+These 3 methods are tree-based and show very high accuracy: **C5.0** method predicted incorrectly only  ***3*** out of ***`r nrow(testing)`*** cases of **testing** dataset. We will use these 3 methods to predict values for **validate** dataset and check whether  prediction for different methods are the same:
+
+```{r eval=FALSE}
+validate_pred <- data.frame(C5.0 = predict(fit_C5.0, validate),
+                            rf = predict(fit_rf, validate),
+                            treebag = predict(fit_treebag, validate))
+```
+```{r echo=FALSE}
+load('Images/validate_pred.RData')
+```
+```{r}
+with(validate_pred, all.equal(C5.0, rf, treebag))
+validate_pred
+```
+
+As all prediction from 3 methods are the same, we use them with practically full confidence. Also, we would like to visualize the accuracy of predictions for different levels of output and methods:
+
+```{r echo=FALSE}
+load('Images/pred.RData')
+pred <- final_pred
+
+pred$same <- pred$class == pred$pred
+high <- aggregate(x = pred$same,by = list(pred$class,pred$method),FUN = mean,simplify = TRUE)
+names(high) <- c('Type', 'Method', 'Accuracy')
+
+ggplot(data = high, aes(x = Type, y = Accuracy, colour = Method, group = Method)) +
+    geom_line(size = 1) + geom_point(size = 3) + ggtitle('Performance on \'testing\' dataset\ntrained on \'training\'')
+
+
+simple <- data.frame(Type = pred[pred$method == 'C5.0',1])
+ggplot(data = simple, aes(x = Type)) + geom_bar() +
+    ggtitle("Distribution of 'testing' dataset\nby output variable level")
+```
+
+The biggest group - **A** - has the highest accuracy among all methods. Also, from the first figure we see 3 groups of methods for this data:
+
+- **C5.0**, **rf** and **treebag**: our selected methods, which are very accurate
+- **ctree**: accuracy of 0.9 and it's tree-based methods (like our 3 selected)
+- **pcaNNet**, **nb** and **lda**: accuracy of 0.65-0.75, not tree-based
+
+We can conclude that tree-based methods are very suitable for this problem and show way better performance than other.
